@@ -18,6 +18,7 @@ dependencies = [
  "log",
  "lora-phy",
  "panic-halt",
+ "pmsa003i",
  "portable-atomic",
  "static_cell",
 ]
@@ -1025,6 +1026,17 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.100",
+]
+
+[[package]]
+name = "pmsa003i"
+version = "0.1.10"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "aadb0c7f917614d82bcfa0b0f6a132483e44bd6f15becc91b03315444c78b5d1"
+dependencies = [
+ "document-features",
+ "embedded-hal 1.0.0",
+ "embedded-hal-async",
 ]
 
 [[package]]

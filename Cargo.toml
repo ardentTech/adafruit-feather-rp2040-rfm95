@@ -16,5 +16,6 @@ embedded-hal = "1.0.0"
 log = "0.4.27"
 lora-phy = "3.0.1"
 panic-halt = "1.0.0"
+pmsa003i = { version = "0.1.10", features = ["async"] }
 portable-atomic = { version = "1.11.0", features = ["critical-section"] }
 static_cell = "2.1.0"

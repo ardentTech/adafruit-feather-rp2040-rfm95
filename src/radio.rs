@@ -131,7 +131,7 @@ impl Radio {
         self.lora.rx(&packet_params, buffer).await.map_err(|_| RadioErr::Rx)
     }
     
-    async fn init_tx(&mut self) -> Result<((ModulationParams, PacketParams)), RadioErr> {
+    async fn init_tx(&mut self) -> Result<(ModulationParams, PacketParams), RadioErr> {
         let mod_params = self.get_mod_params()?;
         let packet_params = self.get_tx_packet_params(&mod_params)?;
         Ok((mod_params, packet_params))

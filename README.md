@@ -8,6 +8,8 @@ The board doesn't expose the SWD pins on the RP2040, so logging is handled via t
 
 ## Hardware
 * [Adafruit Feather RP2040 RFM95 board](https://www.adafruit.com/product/5714)
+* [915MHz Spring Antenna](https://www.adafruit.com/product/4269)
+* [Adafruit PMSA003I Air Quality Breakout](https://www.adafruit.com/product/4632)
 
 ## Resources
 * [Adafruit Feather RP2040 RFM95 guide](https://learn.adafruit.com/feather-rp2040-rfm95)
