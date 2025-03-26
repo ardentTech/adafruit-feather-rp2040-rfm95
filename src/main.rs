@@ -19,7 +19,7 @@ use panic_halt as _;
 use static_cell::StaticCell;
 use crate::bsp::AdafruitFeatherRp2040Rfm95;
 use crate::logger::logger;
-use crate::radio::radio_tx;
+use crate::radio::{radio_rx, radio_tx};
 use crate::types::Spi1Bus;
 
 bind_interrupts!(struct Irqs {
@@ -49,7 +49,8 @@ async fn main(spawner: Spawner) {
     let nss = Output::new(board.rfm_cs.degrade(), Level::High);
     let reset = Output::new(board.rfm_reset.degrade(), Level::High);
     let dio0 = Input::new(board.rfm_io0.degrade(), Pull::None);
-    spawner.must_spawn(radio_tx(spi_bus, nss, reset, dio0));
+    //spawner.must_spawn(radio_tx(spi_bus, nss, reset, dio0));
+    spawner.must_spawn(radio_rx(spi_bus, nss, reset, dio0));
 
     loop {
         board.led.set_high();
