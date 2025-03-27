@@ -6,6 +6,7 @@ mod logger;
 mod common;
 mod radio;
 mod aq;
+mod display;
 
 use embassy_executor::Spawner;
 use embassy_rp::bind_interrupts;
@@ -25,6 +26,7 @@ use crate::bsp::AdafruitFeatherRp2040Rfm95;
 use crate::logger::logger;
 use crate::radio::{radio_rx, radio_tx};
 use crate::common::{AQSensor, I2c1Bus, Spi1Bus};
+use crate::display::oled_display;
 
 static CHANNEL: Channel<ThreadModeRawMutex, AQSensor, 64> = Channel::new();
 
@@ -44,7 +46,12 @@ async fn main(spawner: Spawner) {
     let i2c = i2c::I2c::new_async(board.i2c1, board.i2c1_scl, board.i2c1_sda, Irqs, i2c::Config::default());
     static I2C_BUS: StaticCell<I2c1Bus> = StaticCell::new();
     let i2c_bus = I2C_BUS.init(Mutex::new(i2c));
-    spawner.must_spawn(read_aq(i2c_bus, CHANNEL.sender()));
+
+    // oled display
+    spawner.must_spawn(oled_display(i2c_bus));
+
+    // aq sensor
+    //spawner.must_spawn(read_aq(i2c_bus, CHANNEL.sender()));
 
     // let spi = Spi::new(
     //     board.spi1,
