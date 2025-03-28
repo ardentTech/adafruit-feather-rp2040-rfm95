@@ -1,5 +1,5 @@
 use embassy_rp::gpio::{AnyPin, Input, Level, Output, Pin, Pull};
-use embassy_rp::peripherals::{PIN_4, PIN_3, PIN_2, I2C1, USB, PIN_17, PIN_16, PIN_21, PIN_22, PIN_23, PIN_19, PIN_20, PIN_18, SPI1, PIN_14, PIN_15, PIN_8, PIN_0, PIN_1, PIN_5, PIN_9, PIN_10, PIN_11, PIN_12, PIN_25, PIN_24, PIN_26, PIN_27, PIN_28, PIN_29, DMA_CH0, DMA_CH1};
+use embassy_rp::peripherals::{PIN_4, PIN_3, PIN_2, I2C1, USB, PIN_17, PIN_16, PIN_21, PIN_22, PIN_23, PIN_19, PIN_20, PIN_18, SPI1, PIN_14, PIN_15, PIN_8, PIN_0, PIN_1, PIN_5, PIN_9, PIN_10, PIN_11, PIN_12, PIN_25, PIN_24, PIN_26, PIN_27, PIN_28, PIN_29, DMA_CH0, DMA_CH1, PIN_6};
 
 pub type Button = Input<'static>;
 pub type Led = Output<'static>;
@@ -27,6 +27,7 @@ pub struct AdafruitFeatherRp2040Rfm95 {
 
     // gpio
     pub p5: PIN_5,
+    pub p6: PIN_6,
     pub p9: PIN_9,
     pub p10: PIN_10,
     pub p11: PIN_11,
@@ -74,6 +75,7 @@ impl AdafruitFeatherRp2040Rfm95 {
             i2c1_scl: p.PIN_3,
             i2c1_sda: p.PIN_2,
             p5: p.PIN_5,
+            p6: p.PIN_6,
             p9: p.PIN_9,
             p10: p.PIN_10,
             p11: p.PIN_11,

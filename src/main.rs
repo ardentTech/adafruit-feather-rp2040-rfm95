@@ -43,12 +43,16 @@ async fn main(spawner: Spawner) {
     // enable logging on host via USB-C
     spawner.must_spawn(logger(usb_driver));
 
+    // defaults to 100 kbps, which is the only speed the AQ sensor works with
     let i2c = i2c::I2c::new_async(board.i2c1, board.i2c1_scl, board.i2c1_sda, Irqs, i2c::Config::default());
     static I2C_BUS: StaticCell<I2c1Bus> = StaticCell::new();
     let i2c_bus = I2C_BUS.init(Mutex::new(i2c));
 
     // oled display
-    spawner.must_spawn(oled_display(i2c_bus));
+    let btn_a = Input::new(board.p9, Pull::Up);
+    let btn_b = Input::new(board.p6, Pull::Up);
+    let btn_c = Input::new(board.p5, Pull::Up);
+    spawner.must_spawn(oled_display(i2c_bus, btn_a, btn_b, btn_c));
 
     // aq sensor
     //spawner.must_spawn(read_aq(i2c_bus, CHANNEL.sender()));

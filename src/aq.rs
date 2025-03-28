@@ -5,6 +5,9 @@ use embassy_time::{Duration, Ticker};
 use pmsa003i::Pmsa003i;
 use crate::common::{AQSensor, I2c1Bus};
 
+// The PMSA003I sensor ONLY works with 100 kbps I2C. The datasheet states: "100K sps, Standard NXP
+// EEPROM Protocol." and bc of the "sps" unit I glanced over this without fully registering it.
+// Fast-forward nearly a day after troubleshooting with 400 kbps I2C, and, yeah. Rookie.
 
 #[embassy_executor::task]
 pub async fn read_aq(
