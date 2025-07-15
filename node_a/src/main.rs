@@ -19,7 +19,7 @@ use panic_halt as _;
 use pmsa003i::{Pmsa003i, Reading};
 use sx127x_lora::LoRa;
 use bsp::hal::spi::Enabled;
-use sht30::{Sht30, Sht30Error, Sht30Reading};
+use sht30::{Sht30, Sht30Reading};
 use crate::env_reading::EnvReading;
 
 type I2cBus = I2C<I2C1, (Pin<Gpio2, FunctionI2C, PullUp>, Pin<Gpio3, FunctionI2C, PullUp>)>;
@@ -28,8 +28,10 @@ type Lora = LoRa<SpiBus, Pin<Gpio16, FunctionSio<SioOutput>, PullDown>, Pin<Gpio
 type SpiBus = Spi<Enabled, SPI1, (Pin<Gpio15, FunctionSpi, PullNone>, Pin<Gpio8, FunctionSpi, PullNone>, Pin<Gpio14, FunctionSpi, PullNone>)>;
 
 const ALARM_INTERVAL_SECONDS: u8 = 15;
+const HAPPY: [u8; 4] = [0x3a, 0x29, 0x0d, 0x0a];
 const LORA_FREQUENCY_MHZ: i64 = 915;
 const SECONDS_PER_MINUTE: u8 = 60;
+const UNHAPPY: [u8; 4] = [0x3a, 0x28, 0x0d, 0x0a];
 
 static I2C_BUS: Mutex<RefCell<Option<I2cBus>>> = Mutex::new(RefCell::new(None));
 static LED: Mutex<RefCell<Option<LedPin>>> = Mutex::new(RefCell::new(None));
@@ -144,56 +146,70 @@ fn main() -> ! {
     }
 }
 
-fn read_aq(i2c_bus: &mut I2cBus) -> Reading {
-    let mut pmsa = Pmsa003i::new(&mut *i2c_bus);
-    pmsa.read().unwrap()
+fn blink(delay: u32) {
+    critical_section::with(|cs| {
+        let mut maybe_led = LED.borrow_ref_mut(cs);
+        let mut maybe_timer = TIMER.borrow_ref_mut(cs);
+
+        if let (Some(led), Some(timer)) = (maybe_led.as_mut(), maybe_timer.as_mut()) {
+            led.set_high().unwrap();
+            timer.delay_ms(delay);
+            led.set_low().unwrap();
+            timer.delay_ms(delay);
+        }
+    });
 }
 
-fn read_th(i2c_bus: &mut I2cBus) -> Sht30Reading {
-    let mut sht30 = Sht30::new(&mut *i2c_bus);
-    sht30.read().unwrap()
-}
-
-fn read_sensors() -> Result<EnvReading, ()> {
+fn read_aq() -> Result<Reading, ()> {
     critical_section::with(|cs| {
         let mut maybe_i2c = I2C_BUS.borrow_ref_mut(cs);
         if let Some(i2c_bus) = maybe_i2c.as_mut() {
-            let aq = read_aq(i2c_bus);
-            let th = read_th(i2c_bus);
-
-            Ok(EnvReading::new(aq.pm2_5, aq.pm10, th.humidity, th.temperature_f))
+            let mut pmsa = Pmsa003i::new(i2c_bus);
+            Ok(pmsa.read().unwrap())
         } else {
             Err(())
         }
     })
 }
 
+fn read_th() -> Result<Sht30Reading, ()> {
+    critical_section::with(|cs| {
+        let mut maybe_i2c = I2C_BUS.borrow_ref_mut(cs);
+        if let Some(i2c_bus) = maybe_i2c.as_mut() {
+            let mut sht30 = Sht30::new(i2c_bus);
+            Ok(sht30.read().unwrap())
+        } else {
+            Err(())
+        }
+    })
+}
+
+fn read_sensors() -> Result<EnvReading, ()> {
+    let aq_reading = read_aq()?;
+    let th_reading = read_th()?;
+    Ok(
+        EnvReading::new(
+            aq_reading.pm2_5,
+            aq_reading.pm10,
+            th_reading.humidity,
+            th_reading.temperature_f
+        )
+    )
+}
+
 fn transmit(env_reading: EnvReading) {
     critical_section::with(|cs| {
-        let mut maybe_led = LED.borrow_ref_mut(cs);
         let mut maybe_lora = LORA.borrow_ref_mut(cs);
-        let mut maybe_timer = TIMER.borrow_ref_mut(cs);
 
-        if let (Some(lora), Some(led), Some(timer)) = (maybe_lora.as_mut(), maybe_led.as_mut(), maybe_timer.as_mut()) {
+        if let Some(lora) = maybe_lora.as_mut() {
             let payload: [u8; 8] = env_reading.pack().unwrap();
-            //let payload = [0x3a, 0x29, 0x0d, 0x0a];
             let mut buffer = [0; 255];
             for (i, b) in payload.iter().enumerate() {
                 buffer[i] = *b;
             }
             match lora.transmit_payload(buffer, payload.len()) {
-                Ok(()) => {
-                    led.set_high().unwrap();
-                    timer.delay_ms(500);
-                    led.set_low().unwrap();
-                    timer.delay_ms(5_500);
-                },
-                Err(_) => {
-                    led.set_high().unwrap();
-                    timer.delay_ms(3_000);
-                    led.set_low().unwrap();
-                    timer.delay_ms(3_000);
-                },
+                Ok(_) => blink(500),
+                Err(_) => blink(3_000)
             }
         }
     });
