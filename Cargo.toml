@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = [ "bsp", "node_a"]
+members = [ "bsp", "node_a", "sht30"]
 
 [workspace.dependencies]
 bsp = { path = "bsp" }
@@ -9,6 +9,7 @@ cortex-m-rt = "0.7"
 critical-section = "1.2.0"
 embedded-hal = "1.0.0"
 panic-halt = "1.0.0"
+sht30 = { path = "sht30" }
 
 [profile.release]
 debug = 2

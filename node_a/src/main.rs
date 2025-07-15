@@ -17,9 +17,10 @@ use embedded_hal::digital::{OutputPin, PinState};
 use panic_halt as _;
 use sx127x_lora::LoRa;
 use bsp::hal::spi::Enabled;
+use sht30::{Sht30, Sht30Error, Sht30Reading};
 use crate::env_reading::EnvReading;
 
-//type I2cBus = I2C<I2C1, (Pin<Gpio2, FunctionI2C, PullUp>, Pin<Gpio3, FunctionI2C, PullUp>)>;
+type I2cBus = I2C<I2C1, (Pin<Gpio2, FunctionI2C, PullUp>, Pin<Gpio3, FunctionI2C, PullUp>)>;
 type LedPin = Pin<Gpio13, FunctionSio<SioOutput>, PullDown>;
 type Lora = LoRa<SpiBus, Pin<Gpio16, FunctionSio<SioOutput>, PullDown>, Pin<Gpio17, FunctionSio<SioOutput>, PullDown>, Timer>;
 type SpiBus = Spi<Enabled, SPI1, (Pin<Gpio15, FunctionSpi, PullNone>, Pin<Gpio8, FunctionSpi, PullNone>, Pin<Gpio14, FunctionSpi, PullNone>)>;
@@ -28,6 +29,7 @@ const ALARM_INTERVAL_SECONDS: u8 = 15;
 const LORA_FREQUENCY_MHZ: i64 = 915;
 const SECONDS_PER_MINUTE: u8 = 60;
 
+static I2C_BUS: Mutex<RefCell<Option<I2cBus>>> = Mutex::new(RefCell::new(None));
 static LED: Mutex<RefCell<Option<LedPin>>> = Mutex::new(RefCell::new(None));
 static LORA: Mutex<RefCell<Option<Lora>>> = Mutex::new(RefCell::new(None));
 static RTC: Mutex<RefCell<Option<RealTimeClock>>> = Mutex::new(RefCell::new(None));
@@ -64,16 +66,19 @@ fn main() -> ! {
     });
 
     // I2C
-    // let sda = pins.sda.reconfigure();
-    // let scl = pins.scl.reconfigure();
-    // let mut i2c = bsp::hal::I2C::i2c1(
-    //     pac.I2C1,
-    //     sda,
-    //     scl,
-    //     100.kHz(),
-    //     &mut pac.RESETS,
-    //     &clocks.system_clock,
-    // );
+    let sda = pins.sda.reconfigure();
+    let scl = pins.scl.reconfigure();
+    let i2c_bus = bsp::hal::I2C::i2c1(
+        pac.I2C1,
+        sda,
+        scl,
+        100.kHz(),
+        &mut pac.RESETS,
+        &clocks.system_clock,
+    );
+    critical_section::with(|cs| {
+        I2C_BUS.borrow(cs).replace(Some(i2c_bus));
+    });
 
     // SPI
     let mosi: Pin<Gpio15, FunctionSpi, PullNone> = pins.mosi.reconfigure();
@@ -132,11 +137,28 @@ fn main() -> ! {
 
     loop {
         cortex_m::asm::wfi();
-        read_sensors_and_transmit();
+        read_sensors();
+        transmit();
     }
 }
 
-fn read_sensors_and_transmit() {
+fn read_sensors() -> Result<EnvReading, ()> {
+    critical_section::with(|cs| {
+        let mut maybe_i2c = I2C_BUS.borrow_ref_mut(cs);
+        if let Some(i2c_bus) = maybe_i2c.as_mut() {
+            let mut sht30 = Sht30::new(i2c_bus);
+            let sht30_reading = sht30.read().unwrap();
+
+            Ok(
+                EnvReading::new(0, 0, sht30_reading.humidity, sht30_reading.temperature_f)
+            )
+        } else {
+            Err(())
+        }
+    })
+}
+
+fn transmit() {
     critical_section::with(|cs| {
         let mut maybe_led = LED.borrow_ref_mut(cs);
         let mut maybe_lora = LORA.borrow_ref_mut(cs);
