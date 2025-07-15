@@ -78,3 +78,54 @@ impl<I2C: I2c> Sht30<I2C> {
         Ok(reading)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::*;
+    use embedded_hal::i2c::ErrorKind;
+    use embedded_hal_mock::eh1::i2c::{Mock as I2cMock, Transaction as I2cTransaction};
+
+    #[test]
+    fn read_i2c_error() {
+        let expectations = [
+            I2cTransaction::write_read(SHT30_ADDRESS, READ_CMD.to_vec(), [2u8, 4u8, 156u8, 8u8, 16u8, 245u8].to_vec()).with_error(ErrorKind::Other)
+        ];
+        let mut i2c = I2cMock::new(&expectations);
+        let mut sht30 = Sht30::new(&mut i2c);
+        let err = sht30.read().unwrap_err();
+        assert_eq!(err, Sht30Error::I2C(ErrorKind::Other));
+        i2c.done();
+        assert!(true);
+    }
+
+    #[test]
+    fn read_invalid_crc_error() {
+        let expectations = [
+            I2cTransaction::write_read(SHT30_ADDRESS, READ_CMD.to_vec(), [0u8; 6].to_vec())
+        ];
+        let mut i2c = I2cMock::new(&expectations);
+        let mut sht30 = Sht30::new(&mut i2c);
+        match sht30.read() {
+            Err(e) => assert_eq!(e, Sht30Error::InvalidCrc),
+            _ => panic!("expected an error")
+        };
+        i2c.done();
+    }
+
+    #[test]
+    fn read_ok() {
+        let expectations = [
+            I2cTransaction::write_read(SHT30_ADDRESS, READ_CMD.to_vec(), [0x5f, 0x58, 0x38, 0x7b, 0xb2, 0x7d].to_vec(),)
+        ];
+        let mut i2c = I2cMock::new(&expectations);
+        let mut sht30 = Sht30::new(&mut i2c);
+        match sht30.read() {
+            Ok(reading) => {
+                assert_eq!(reading.humidity, 48);
+                assert_eq!(reading.temperature_f, 68);
+            },
+            Err(e) => panic!("unexpected error: {:?}", e)
+        };
+        i2c.done();
+    }
+}

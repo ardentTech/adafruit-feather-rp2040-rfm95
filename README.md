@@ -18,3 +18,7 @@ Building+flashing the `node_a` package with the `release` profile will result in
 and NO exposed USB serial device:
 1. `$ cargo build --release -p node_a`
 2. `$ cargo run --release -p node_a`
+
+### Testing
+Tests are run on the host system:
+`$ cargo test -p <name> --target=x86_64-unknown-linux-gnu`

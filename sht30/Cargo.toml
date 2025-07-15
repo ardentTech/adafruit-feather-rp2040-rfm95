@@ -6,3 +6,6 @@ edition = "2024"
 [dependencies]
 crc = "3.3.0"
 embedded-hal = { workspace = true }
+
+[dev-dependencies]
+embedded-hal-mock = "0.11.1"
