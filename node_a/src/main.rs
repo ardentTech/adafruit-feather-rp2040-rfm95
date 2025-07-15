@@ -1,5 +1,5 @@
 #![no_std]
-#![no_main]
+#![cfg_attr(not(test), no_main)]
 
 mod env_reading;
 
@@ -15,6 +15,7 @@ use critical_section::Mutex;
 use embedded_hal::delay::DelayNs;
 use embedded_hal::digital::{OutputPin, PinState};
 use packed_struct::PackedStruct;
+#[cfg(not(test))]
 use panic_halt as _;
 use pmsa003i::{Pmsa003i, Reading};
 use sx127x_lora::LoRa;
@@ -197,15 +198,18 @@ fn transmit(env_reading: EnvReading) {
 }
 
 // schedule an RTC alarm every ALARM_INTERVAL_SECONDS, wrapping around as needed
-// TODO unit test
 fn schedule_next_alarm(rtc: &mut RealTimeClock) {
     let now = rtc.now().unwrap();
-    let next = if now.second > (SECONDS_PER_MINUTE - ALARM_INTERVAL_SECONDS - 1) {
-        ALARM_INTERVAL_SECONDS - (SECONDS_PER_MINUTE - now.second)
-    } else {
-        ALARM_INTERVAL_SECONDS + now.second
-    };
+    let next = get_next_alarm_secs(now.second);
     rtc.schedule_alarm(rtc::DateTimeFilter::default().second(next));
+}
+
+fn get_next_alarm_secs(now_secs: u8) -> u8 {
+    if now_secs > (SECONDS_PER_MINUTE - ALARM_INTERVAL_SECONDS - 1) {
+        ALARM_INTERVAL_SECONDS - (SECONDS_PER_MINUTE - now_secs)
+    } else {
+        ALARM_INTERVAL_SECONDS + now_secs
+    }
 }
 
 #[allow(non_snake_case)]
@@ -222,7 +226,7 @@ fn RTC_IRQ() { // IRQ25
 
 // TODO create discrete init functions
 // TODO logging
-#[bsp::entry]
+#[cfg_attr(not(test), bsp::entry)]
 fn main() -> ! {
     let mut pac = pac::Peripherals::take().unwrap();
     let mut core = pac::CorePeripherals::take().unwrap();
@@ -340,5 +344,22 @@ fn main() -> ! {
         cortex_m::asm::wfi();
         let env_reading = read_sensors().unwrap();
         transmit(env_reading);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::*;
+
+    #[test]
+    fn get_next_alarm_secs_floor() {
+        let res = get_next_alarm_secs(0_u8);
+        assert_eq!(res, 15);
+    }
+
+    #[test]
+    fn get_next_alarm_secs_ceiling() {
+        let res = get_next_alarm_secs(59_u8);
+        assert_eq!(res, 14);
     }
 }
