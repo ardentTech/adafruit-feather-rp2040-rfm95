@@ -1,0 +1,18 @@
+[package]
+name = "node_a"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+bsp = { workspace = true }
+cortex-m = { workspace = true }
+cortex-m-rt = { workspace = true }
+critical-section = { workspace = true }
+embedded-hal = { workspace = true }
+packed_struct = { version = "0.10.1", default-features = false }
+panic-halt = { workspace = true }
+sx127x_lora = "0.3.1"
+
+[dev-dependencies]
+usb-device = "0.3.2"
+usbd-serial = "0.2.2"
