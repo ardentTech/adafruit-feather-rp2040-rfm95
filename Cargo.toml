@@ -17,6 +17,6 @@ lto = true
 opt-level = "z"
 
 [profile.dev]
-debug = 2
+debug = true
 lto = true
 opt-level = "z"

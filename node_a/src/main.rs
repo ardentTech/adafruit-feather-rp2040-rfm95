@@ -18,33 +18,216 @@ use packed_struct::PackedStruct;
 use panic_halt as _;
 use pmsa003i::{Pmsa003i, Reading};
 use sx127x_lora::LoRa;
+use bsp::hal::multicore::{Multicore, Stack};
 use bsp::hal::spi::Enabled;
 use sht30::{Sht30, Sht30Reading};
 use crate::env_reading::EnvReading;
+
+#[cfg(debug_assertions)]
+use usb_device::bus::UsbBusAllocator;
+#[cfg(debug_assertions)]
+use usb_device::prelude::{StringDescriptors, UsbDeviceBuilder, UsbVidPid};
+#[cfg(debug_assertions)]
+use usbd_serial::{SerialPort, USB_CLASS_CDC};
+use bsp::hal::sio::SioFifo;
 
 type I2cBus = I2C<I2C1, (Pin<Gpio2, FunctionI2C, PullUp>, Pin<Gpio3, FunctionI2C, PullUp>)>;
 type LedPin = Pin<Gpio13, FunctionSio<SioOutput>, PullDown>;
 type Lora = LoRa<SpiBus, Pin<Gpio16, FunctionSio<SioOutput>, PullDown>, Pin<Gpio17, FunctionSio<SioOutput>, PullDown>, Timer>;
 type SpiBus = Spi<Enabled, SPI1, (Pin<Gpio15, FunctionSpi, PullNone>, Pin<Gpio8, FunctionSpi, PullNone>, Pin<Gpio14, FunctionSpi, PullNone>)>;
 
+/// Stack for core 1
+///
+/// Core 0 gets its stack via the normal route - any memory not used by static values is
+/// reserved for stack and initialised by cortex-m-rt.
+/// To get the same for Core 1, we would need to compile everything separately and
+/// modify the linker file for both programs, and that's quite annoying.
+/// So instead, core1.spawn takes a [usize] which gets used for the stack.
+/// NOTE: We use the `Stack` struct here to ensure that it has 32-byte alignment, which allows
+/// the stack guard to take up the least amount of usable RAM.
+#[cfg(debug_assertions)]
+static CORE1_STACK: Stack<4096> = Stack::new();
+
 const ALARM_INTERVAL_SECONDS: u8 = 15;
 const HAPPY: [u8; 4] = [0x3a, 0x29, 0x0d, 0x0a];
 const LORA_FREQUENCY_MHZ: i64 = 915;
+const LORA_TX_OK: u32 = 0x0;
+const LORA_TX_ERR: u32 = 0x1;
 const SECONDS_PER_MINUTE: u8 = 60;
+const UNEXPECTED: [u8; 4] = [0x3f, 0x3f, 0x0d, 0x0a];
 const UNHAPPY: [u8; 4] = [0x3a, 0x28, 0x0d, 0x0a];
 
 static I2C_BUS: Mutex<RefCell<Option<I2cBus>>> = Mutex::new(RefCell::new(None));
 static LED: Mutex<RefCell<Option<LedPin>>> = Mutex::new(RefCell::new(None));
 static LORA: Mutex<RefCell<Option<Lora>>> = Mutex::new(RefCell::new(None));
 static RTC: Mutex<RefCell<Option<RealTimeClock>>> = Mutex::new(RefCell::new(None));
+static SIO_FIFO: Mutex<RefCell<Option<SioFifo>>> = Mutex::new(RefCell::new(None));
 static TIMER: Mutex<RefCell<Option<Timer>>> = Mutex::new(RefCell::new(None));
 
+fn blink(delay: u32) {
+    critical_section::with(|cs| {
+        let mut maybe_led = LED.borrow_ref_mut(cs);
+        let mut maybe_timer = TIMER.borrow_ref_mut(cs);
+
+        if let (Some(led), Some(timer)) = (maybe_led.as_mut(), maybe_timer.as_mut()) {
+            led.set_high().unwrap();
+            timer.delay_ms(delay);
+            led.set_low().unwrap();
+            timer.delay_ms(delay);
+        }
+    });
+}
+
+// TODO print last EnvReading instead of (un)happy
+#[cfg(debug_assertions)]
+fn core1_task(sys_freq: u32) -> ! {
+    let mut pac = unsafe { pac::Peripherals::steal() };
+    let mut sio = Sio::new(pac.SIO);
+    let mut watchdog = Watchdog::new(pac.WATCHDOG);
+
+    let clocks = init_clocks_and_plls(
+        bsp::XOSC_CRYSTAL_FREQ_HZ,
+        pac.XOSC,
+        pac.CLOCKS,
+        pac.PLL_SYS,
+        pac.PLL_USB,
+        &mut pac.RESETS,
+        &mut watchdog,
+    )
+        .ok()
+        .unwrap();
+
+    let usb_bus = UsbBusAllocator::new(bsp::hal::usb::UsbBus::new(
+        pac.USBCTRL_REGS,
+        pac.USBCTRL_DPRAM,
+        clocks.usb_clock,
+        true,
+        &mut pac.RESETS,
+    ));
+    let mut serial = SerialPort::new(&usb_bus);
+    let mut usb_dev = UsbDeviceBuilder::new(&usb_bus, UsbVidPid(0x16c0, 0x27dd))
+        .strings(&[StringDescriptors::default()
+            .manufacturer("Raspberry Pi")
+            .product("RP2 USB Serial")
+            .serial_number("E0C9125B0D9B")])
+        .unwrap()
+        .device_class(USB_CLASS_CDC) // from: https://www.usb.org/defined-class-codes
+        .build();
+
+    loop {
+        if !usb_dev.poll(&mut [&mut serial]) {
+            continue;
+        }
+        match sio.fifo.read() {
+            Some(word) => {
+                match word {
+                    LORA_TX_OK => serial.write(&HAPPY).unwrap(),
+                    LORA_TX_ERR => serial.write(&UNHAPPY).unwrap(),
+                    _ => serial.write(&UNEXPECTED).unwrap()
+                };
+            },
+            None => continue,
+        }
+    }
+}
+
+fn read_aq() -> Result<Reading, ()> {
+    critical_section::with(|cs| {
+        let mut maybe_i2c = I2C_BUS.borrow_ref_mut(cs);
+        if let Some(i2c_bus) = maybe_i2c.as_mut() {
+            let mut pmsa = Pmsa003i::new(i2c_bus);
+            Ok(pmsa.read().unwrap())
+        } else {
+            Err(())
+        }
+    })
+}
+
+fn read_th() -> Result<Sht30Reading, ()> {
+    critical_section::with(|cs| {
+        let mut maybe_i2c = I2C_BUS.borrow_ref_mut(cs);
+        if let Some(i2c_bus) = maybe_i2c.as_mut() {
+            let mut sht30 = Sht30::new(i2c_bus);
+            Ok(sht30.read().unwrap())
+        } else {
+            Err(())
+        }
+    })
+}
+
+fn read_sensors() -> Result<EnvReading, ()> {
+    let aq_reading = read_aq()?;
+    let th_reading = read_th()?;
+    Ok(
+        EnvReading::new(
+            aq_reading.pm2_5,
+            aq_reading.pm10,
+            th_reading.humidity,
+            th_reading.temperature_f
+        )
+    )
+}
+
+// TODO don't need sio.fifo unless debug
+fn transmit(env_reading: EnvReading) {
+    critical_section::with(|cs| {
+        let mut maybe_lora = LORA.borrow_ref_mut(cs);
+        let mut maybe_sio_fifo = SIO_FIFO.borrow_ref_mut(cs);
+
+        if let (Some(lora), Some(sio_fifo)) = (maybe_lora.as_mut(), maybe_sio_fifo.as_mut()) {
+            let payload: [u8; 8] = env_reading.pack().unwrap();
+            let mut buffer = [0; 255];
+            for (i, b) in payload.iter().enumerate() {
+                buffer[i] = *b;
+            }
+            match lora.transmit_payload(buffer, payload.len()) {
+                Ok(_) => {
+                    blink(500);
+                    #[cfg(debug_assertions)]
+                    sio_fifo.write(LORA_TX_OK);
+                },
+                Err(_) => {
+                    blink(3_000);
+                    #[cfg(debug_assertions)]
+                    sio_fifo.write(LORA_TX_ERR);
+                }
+            }
+        }
+    });
+}
+
+// schedule an RTC alarm every ALARM_INTERVAL_SECONDS, wrapping around as needed
+// TODO unit test
+fn schedule_next_alarm(rtc: &mut RealTimeClock) {
+    let now = rtc.now().unwrap();
+    let next = if now.second > (SECONDS_PER_MINUTE - ALARM_INTERVAL_SECONDS - 1) {
+        ALARM_INTERVAL_SECONDS - (SECONDS_PER_MINUTE - now.second)
+    } else {
+        ALARM_INTERVAL_SECONDS + now.second
+    };
+    rtc.schedule_alarm(rtc::DateTimeFilter::default().second(next));
+}
+
+#[allow(non_snake_case)]
+#[interrupt]
+fn RTC_IRQ() { // IRQ25
+    critical_section::with(|cs| {
+        let mut maybe_rtc = RTC.borrow_ref_mut(cs);
+        if let Some(rtc) = maybe_rtc.as_mut() {
+            rtc.clear_interrupt();
+            schedule_next_alarm(rtc);
+        }
+    });
+}
+
+// TODO create discrete init functions
+// TODO logging
 #[bsp::entry]
 fn main() -> ! {
     let mut pac = pac::Peripherals::take().unwrap();
     let mut core = pac::CorePeripherals::take().unwrap();
     let mut watchdog = Watchdog::new(pac.WATCHDOG);
-    let sio = Sio::new(pac.SIO);
+    let mut sio = Sio::new(pac.SIO);
 
     let pins = bsp::Pins::new(
         pac.IO_BANK0,
@@ -134,7 +317,21 @@ fn main() -> ! {
         LED.borrow(cs).replace(Some(led));
     });
 
+    #[cfg(debug_assertions)]
+    {
+        let mut mc = Multicore::new(&mut pac.PSM, &mut pac.PPB, &mut sio.fifo);
+        let cores = mc.cores();
+        let core1 = &mut cores[1];
+        let sys_freq = clocks.system_clock.freq().to_Hz();
+        let _ = core1.spawn(CORE1_STACK.take().unwrap(), move || core1_task(sys_freq));
+    }
+    critical_section::with(|cs| {
+        SIO_FIFO.borrow(cs).replace(Some(sio.fifo));
+    });
+
+    // TODO use dormant once external RTC is available
     core.SCB.set_sleepdeep();
+
     unsafe {
         pac::NVIC::unmask(pac::Interrupt::RTC_IRQ);
     }
@@ -144,97 +341,4 @@ fn main() -> ! {
         let env_reading = read_sensors().unwrap();
         transmit(env_reading);
     }
-}
-
-fn blink(delay: u32) {
-    critical_section::with(|cs| {
-        let mut maybe_led = LED.borrow_ref_mut(cs);
-        let mut maybe_timer = TIMER.borrow_ref_mut(cs);
-
-        if let (Some(led), Some(timer)) = (maybe_led.as_mut(), maybe_timer.as_mut()) {
-            led.set_high().unwrap();
-            timer.delay_ms(delay);
-            led.set_low().unwrap();
-            timer.delay_ms(delay);
-        }
-    });
-}
-
-fn read_aq() -> Result<Reading, ()> {
-    critical_section::with(|cs| {
-        let mut maybe_i2c = I2C_BUS.borrow_ref_mut(cs);
-        if let Some(i2c_bus) = maybe_i2c.as_mut() {
-            let mut pmsa = Pmsa003i::new(i2c_bus);
-            Ok(pmsa.read().unwrap())
-        } else {
-            Err(())
-        }
-    })
-}
-
-fn read_th() -> Result<Sht30Reading, ()> {
-    critical_section::with(|cs| {
-        let mut maybe_i2c = I2C_BUS.borrow_ref_mut(cs);
-        if let Some(i2c_bus) = maybe_i2c.as_mut() {
-            let mut sht30 = Sht30::new(i2c_bus);
-            Ok(sht30.read().unwrap())
-        } else {
-            Err(())
-        }
-    })
-}
-
-fn read_sensors() -> Result<EnvReading, ()> {
-    let aq_reading = read_aq()?;
-    let th_reading = read_th()?;
-    Ok(
-        EnvReading::new(
-            aq_reading.pm2_5,
-            aq_reading.pm10,
-            th_reading.humidity,
-            th_reading.temperature_f
-        )
-    )
-}
-
-fn transmit(env_reading: EnvReading) {
-    critical_section::with(|cs| {
-        let mut maybe_lora = LORA.borrow_ref_mut(cs);
-
-        if let Some(lora) = maybe_lora.as_mut() {
-            let payload: [u8; 8] = env_reading.pack().unwrap();
-            let mut buffer = [0; 255];
-            for (i, b) in payload.iter().enumerate() {
-                buffer[i] = *b;
-            }
-            match lora.transmit_payload(buffer, payload.len()) {
-                Ok(_) => blink(500),
-                Err(_) => blink(3_000)
-            }
-        }
-    });
-}
-
-// schedule an RTC alarm every ALARM_INTERVAL_SECONDS, wrapping around as needed
-// TODO unit test
-fn schedule_next_alarm(rtc: &mut RealTimeClock) {
-    let now = rtc.now().unwrap();
-    let next = if now.second > (SECONDS_PER_MINUTE - ALARM_INTERVAL_SECONDS - 1) {
-        ALARM_INTERVAL_SECONDS - (SECONDS_PER_MINUTE - now.second)
-    } else {
-        ALARM_INTERVAL_SECONDS + now.second
-    };
-    rtc.schedule_alarm(rtc::DateTimeFilter::default().second(next));
-}
-
-#[allow(non_snake_case)]
-#[interrupt]
-fn RTC_IRQ() { // IRQ25
-    critical_section::with(|cs| {
-        let mut maybe_rtc = RTC.borrow_ref_mut(cs);
-        if let Some(rtc) = maybe_rtc.as_mut() {
-            rtc.clear_interrupt();
-            schedule_next_alarm(rtc);
-        }
-    });
 }

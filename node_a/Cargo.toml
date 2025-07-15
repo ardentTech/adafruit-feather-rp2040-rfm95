@@ -14,7 +14,5 @@ panic-halt = { workspace = true }
 pmsa003i = "0.1.11"
 sht30 = { workspace = true }
 sx127x_lora = "0.3.1"
-
-[dev-dependencies]
 usb-device = "0.3.2"
 usbd-serial = "0.2.2"
