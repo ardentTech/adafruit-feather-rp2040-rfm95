@@ -11,6 +11,7 @@ critical-section = { workspace = true }
 embedded-hal = { workspace = true }
 packed_struct = { version = "0.10.1", default-features = false }
 panic-halt = { workspace = true }
+pmsa003i = "0.1.11"
 sht30 = { workspace = true }
 sx127x_lora = "0.3.1"
 

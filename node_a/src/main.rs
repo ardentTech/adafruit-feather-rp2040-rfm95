@@ -14,7 +14,9 @@ use core::cell::RefCell;
 use critical_section::Mutex;
 use embedded_hal::delay::DelayNs;
 use embedded_hal::digital::{OutputPin, PinState};
+use packed_struct::PackedStruct;
 use panic_halt as _;
+use pmsa003i::{Pmsa003i, Reading};
 use sx127x_lora::LoRa;
 use bsp::hal::spi::Enabled;
 use sht30::{Sht30, Sht30Error, Sht30Reading};
@@ -137,39 +139,47 @@ fn main() -> ! {
 
     loop {
         cortex_m::asm::wfi();
-        read_sensors();
-        transmit();
+        let env_reading = read_sensors().unwrap();
+        transmit(env_reading);
     }
+}
+
+fn read_aq(i2c_bus: &mut I2cBus) -> Reading {
+    let mut pmsa = Pmsa003i::new(&mut *i2c_bus);
+    pmsa.read().unwrap()
+}
+
+fn read_th(i2c_bus: &mut I2cBus) -> Sht30Reading {
+    let mut sht30 = Sht30::new(&mut *i2c_bus);
+    sht30.read().unwrap()
 }
 
 fn read_sensors() -> Result<EnvReading, ()> {
     critical_section::with(|cs| {
         let mut maybe_i2c = I2C_BUS.borrow_ref_mut(cs);
         if let Some(i2c_bus) = maybe_i2c.as_mut() {
-            let mut sht30 = Sht30::new(i2c_bus);
-            let sht30_reading = sht30.read().unwrap();
+            let aq = read_aq(i2c_bus);
+            let th = read_th(i2c_bus);
 
-            Ok(
-                EnvReading::new(0, 0, sht30_reading.humidity, sht30_reading.temperature_f)
-            )
+            Ok(EnvReading::new(aq.pm2_5, aq.pm10, th.humidity, th.temperature_f))
         } else {
             Err(())
         }
     })
 }
 
-fn transmit() {
+fn transmit(env_reading: EnvReading) {
     critical_section::with(|cs| {
         let mut maybe_led = LED.borrow_ref_mut(cs);
         let mut maybe_lora = LORA.borrow_ref_mut(cs);
         let mut maybe_timer = TIMER.borrow_ref_mut(cs);
 
         if let (Some(lora), Some(led), Some(timer)) = (maybe_lora.as_mut(), maybe_led.as_mut(), maybe_timer.as_mut()) {
-            //let payload: [u8; 8] = env_reading.pack().unwrap();
-            let payload = [0x3a, 0x29, 0x0d, 0x0a];
+            let payload: [u8; 8] = env_reading.pack().unwrap();
+            //let payload = [0x3a, 0x29, 0x0d, 0x0a];
             let mut buffer = [0; 255];
-            for (i,c) in payload.iter().enumerate() {
-                buffer[i] = *c;
+            for (i, b) in payload.iter().enumerate() {
+                buffer[i] = *b;
             }
             match lora.transmit_payload(buffer, payload.len()) {
                 Ok(()) => {
