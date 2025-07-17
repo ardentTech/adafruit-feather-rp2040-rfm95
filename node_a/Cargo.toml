@@ -9,6 +9,7 @@ cortex-m = { workspace = true }
 cortex-m-rt = { workspace = true }
 critical-section = { workspace = true }
 embedded-hal = { workspace = true }
+heapless = "0.8.0"
 packed_struct = { version = "0.10.1", default-features = false }
 panic-halt = { workspace = true }
 pmsa003i = "0.1.11"

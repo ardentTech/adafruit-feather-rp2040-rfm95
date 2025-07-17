@@ -341,6 +341,7 @@ dependencies = [
  "cortex-m-rt",
  "critical-section",
  "embedded-hal 1.0.0",
+ "heapless",
  "packed_struct",
  "panic-halt",
  "pmsa003i",

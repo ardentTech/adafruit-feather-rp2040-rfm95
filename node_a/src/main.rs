@@ -14,6 +14,7 @@ use core::cell::RefCell;
 use critical_section::Mutex;
 use embedded_hal::delay::DelayNs;
 use embedded_hal::digital::{OutputPin, PinState};
+use heapless::String;
 use packed_struct::PackedStruct;
 #[cfg(not(test))]
 use panic_halt as _;
@@ -50,7 +51,7 @@ type SpiBus = Spi<Enabled, SPI1, (Pin<Gpio15, FunctionSpi, PullNone>, Pin<Gpio8,
 static CORE1_STACK: Stack<4096> = Stack::new();
 
 const ALARM_INTERVAL_SECONDS: u8 = 15;
-const HAPPY: [u8; 4] = [0x3a, 0x29, 0x0d, 0x0a];
+//const HAPPY: [u8; 4] = [0x3a, 0x29, 0x0d, 0x0a];
 const LORA_FREQUENCY_MHZ: i64 = 915;
 const LORA_TX_OK: u32 = 0x0;
 const LORA_TX_ERR: u32 = 0x1;
@@ -58,12 +59,14 @@ const SECONDS_PER_MINUTE: u8 = 60;
 const UNEXPECTED: [u8; 4] = [0x3f, 0x3f, 0x0d, 0x0a];
 const UNHAPPY: [u8; 4] = [0x3a, 0x28, 0x0d, 0x0a];
 
+// TODO diff between release and dev statics
 static I2C_BUS: Mutex<RefCell<Option<I2cBus>>> = Mutex::new(RefCell::new(None));
 static LED: Mutex<RefCell<Option<LedPin>>> = Mutex::new(RefCell::new(None));
 static LORA: Mutex<RefCell<Option<Lora>>> = Mutex::new(RefCell::new(None));
 static RTC: Mutex<RefCell<Option<RealTimeClock>>> = Mutex::new(RefCell::new(None));
 static SIO_FIFO: Mutex<RefCell<Option<SioFifo>>> = Mutex::new(RefCell::new(None));
 static TIMER: Mutex<RefCell<Option<Timer>>> = Mutex::new(RefCell::new(None));
+static LAST_ENV_READING: Mutex<RefCell<Option<EnvReading>>> = Mutex::new(RefCell::new(None));
 
 fn blink(delay: u32) {
     critical_section::with(|cs| {
@@ -79,9 +82,8 @@ fn blink(delay: u32) {
     });
 }
 
-// TODO print last EnvReading instead of (un)happy
 #[cfg(debug_assertions)]
-fn core1_task(sys_freq: u32) -> ! {
+fn core1_task(_sys_freq: u32) -> ! {
     let mut pac = unsafe { pac::Peripherals::steal() };
     let mut sio = Sio::new(pac.SIO);
     let mut watchdog = Watchdog::new(pac.WATCHDOG);
@@ -121,11 +123,19 @@ fn core1_task(sys_freq: u32) -> ! {
         }
         match sio.fifo.read() {
             Some(word) => {
+
                 match word {
-                    LORA_TX_OK => serial.write(&HAPPY).unwrap(),
-                    LORA_TX_ERR => serial.write(&UNHAPPY).unwrap(),
-                    _ => serial.write(&UNEXPECTED).unwrap()
-                };
+                    LORA_TX_OK => {
+                        critical_section::with(|cs| {
+                            if let Some(reading) = LAST_ENV_READING.replace(cs, None) {
+                                let s: String<32> = reading.into();
+                                serial.write(s.as_bytes()).unwrap();
+                            }
+                        });
+                    },
+                    LORA_TX_ERR => { serial.write(&UNHAPPY).unwrap(); }
+                    _ => { serial.write(&UNEXPECTED).unwrap(); }
+                }
             },
             None => continue,
         }
@@ -169,11 +179,10 @@ fn read_sensors() -> Result<EnvReading, ()> {
     )
 }
 
-// TODO don't need sio.fifo unless debug
 fn transmit(env_reading: EnvReading) {
     critical_section::with(|cs| {
         let mut maybe_lora = LORA.borrow_ref_mut(cs);
-        let mut maybe_sio_fifo = SIO_FIFO.borrow_ref_mut(cs);
+        let mut maybe_sio_fifo = SIO_FIFO.borrow_ref_mut(cs); // TODO only needed for dev profile
 
         if let (Some(lora), Some(sio_fifo)) = (maybe_lora.as_mut(), maybe_sio_fifo.as_mut()) {
             let payload: [u8; 8] = env_reading.pack().unwrap();
@@ -183,14 +192,19 @@ fn transmit(env_reading: EnvReading) {
             }
             match lora.transmit_payload(buffer, payload.len()) {
                 Ok(_) => {
-                    blink(500);
                     #[cfg(debug_assertions)]
-                    sio_fifo.write(LORA_TX_OK);
+                    {
+                        LAST_ENV_READING.borrow(cs).replace(Some(env_reading));
+                        sio_fifo.write(LORA_TX_OK);
+                        blink(500);
+                    }
                 },
                 Err(_) => {
-                    blink(3_000);
                     #[cfg(debug_assertions)]
-                    sio_fifo.write(LORA_TX_ERR);
+                    {
+                        sio_fifo.write(LORA_TX_ERR);
+                        blink(3_000);
+                    }
                 }
             }
         }
